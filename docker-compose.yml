@@ -1,0 +1,97 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecomjava_postgres
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
+      POSTGRES_DB: ${PG_DATABASE:-ecommerce}
+    ports:
+      - "5432:5432"
+    volumes:
+      - javapgdata:/var/lib/postgresql/data
+
+  mongo:
+    image: mongo:7
+    container_name: ecomjava_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - javamongodata:/data/db
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: ecomjava_elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - javaesdata:/usr/share/elasticsearch/data
+
+  database-init:
+    image: postgres:16-alpine
+    container_name: ecomjava_database_init
+    environment:
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:-postgres}
+      PG_DATABASE: ${PG_DATABASE:-ecommerce}
+      PGPASSWORD: ${PG_PASSWORD:-postgres}
+    volumes:
+      - ./sql:/sql:ro
+    command: >
+      sh -c 'for i in $$(seq 1 30); do
+        psql -h postgres -U $$PG_USER -d $$PG_DATABASE -f /sql/postgres_schema.sql && break;
+        sleep 2;
+      done'
+    depends_on:
+      - postgres
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: ecomjava_backend
+    environment:
+      DB_URL: "jdbc:postgresql://postgres:5432/${PG_DATABASE:-ecommerce}"
+      DB_USER: ${PG_USER:-postgres}
+      DB_PASSWORD: ${PG_PASSWORD:-postgres}
+      MONGO_URI: mongodb://mongo:27017/${MONGO_DATABASE:-ecommerce}
+      ES_URL: http://elasticsearch:9200
+      ES_INDEX: ${ES_INDEX:-orders}
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - database-init
+
+  frontend:
+    build:
+      context: ./client
+    container_name: ecomjava_frontend
+    environment:
+      API_PROXY: http://backend:8000
+    ports:
+      - "5175:5175"
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: ecomjava_nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  javapgdata:
+  javamongodata:
+  javaesdata:
